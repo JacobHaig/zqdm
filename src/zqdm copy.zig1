@@ -1,0 +1,126 @@
+const std = @import("std");
+const builtin = @import("builtin");
+// const zqdm = @import("zqdm");
+const unicode = @import("std").unicode;
+
+pub fn zqdm(comptime T: type) type {
+    const Zqdm = struct {
+        const Self = @This();
+
+        filled_char: []const u8 = "█",
+        empty_char: []const u8 = "░",
+
+        slice: []const T,
+        element: usize,
+        terminal_width: usize,
+
+        allocator: std.mem.Allocator,
+        stdout_backlog: std.ArrayList(u8),
+
+        pub fn new(allocator: std.mem.Allocator, slice: []const T) Self {
+            var terminal_width: usize = undefined;
+
+            switch (builtin.os.tag) {
+                .windows => {
+                    // Enable UTF-8 output - required for windows terminal to display unicode characters correctly
+                    _ = std.os.windows.kernel32.SetConsoleOutputCP(65001);
+
+                    // Get terminal width
+                    var buf: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
+                    _ = std.os.windows.kernel32.GetConsoleScreenBufferInfo(std.fs.File.stdout().handle, &buf);
+                    terminal_width = @intCast(buf.srWindow.Right - buf.srWindow.Left + 1);
+                },
+                else => @panic("Only Windows is supported for now. Feel free to contribute!"),
+            }
+
+            return Self{
+                .slice = slice,
+                .element = 0,
+                .terminal_width = terminal_width,
+                .allocator = allocator,
+                .stdout_backlog = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable,
+            };
+        }
+
+        pub fn get(self: *Self) T {
+            return self.slice[self.element - 1];
+        }
+
+        pub fn next(self: *Self) ?*Self {
+            if (self.element >= self.slice.len) return null;
+            self.element += 1;
+
+            self.display();
+
+            return self;
+        }
+
+        pub fn display(self: *Self) void {
+            const percentage: f32 = @as(f32, @floatFromInt(self.element)) / @as(f32, @floatFromInt(self.slice.len));
+
+            print_percentage(percentage);
+            // self.progress_bar(percentage, self.terminal_width);
+        }
+
+        pub fn print_percentage(percentage: f32) void {
+            var stderr_buffer: [1024]u8 = undefined;
+            var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+            const stderr = &stderr_writer.interface;
+
+            // print a carriage return to overwrite the previous line
+            stderr.print("\r", .{}) catch unreachable;
+            stderr.print("{d:>6.2}%", .{percentage * 100.0}) catch unreachable;
+            stderr.flush() catch unreachable;
+        }
+
+        // pub fn estimated_time_remaining(self: *Self, percentage: f32, elapsed: std.time.Duration) std.time.Duration {
+        //     if (percentage == 0.0) return std.time.Duration.max;
+
+        //     const total_estimated = elapsed / @as(std.time.Duration, percentage);
+        //     return total_estimated - elapsed;
+        // }
+
+        pub fn progress_bar(self: *Self, percentage: f32, terminal_width: usize) void {
+            const terminal_width_f32: f32 = @floatFromInt(terminal_width);
+            const print_width: usize = @intFromFloat(percentage * terminal_width_f32);
+
+            var stderr_buffer: [1024]u8 = undefined;
+            var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+            const stderr = &stderr_writer.interface;
+
+            // print a carriage return to overwrite the previous line
+            stderr.print("\r", .{}) catch unreachable;
+            // Draw the filled part of the progress bar
+            for (0..print_width) |_| stderr.print("{s}", .{self.filled_char}) catch unreachable;
+            // Draw the empty part of the progress bar
+            for (print_width..terminal_width) |_| stderr.print("{s}", .{self.empty_char}) catch unreachable;
+
+            stderr.flush() catch unreachable;
+        }
+
+        /// Like tqdm.write: prints a message above the progress bar, then redraws the bar.
+        pub fn write(self: *Self, comptime fmt: []const u8, args: anytype) !void {
+            // Write the user message to stdout_backlog, once its done iterating we'll print it out
+            const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
+            _ = try self.stdout_backlog.appendSlice(self.allocator, msg);
+
+            // If we're done iterating, print the backlog and clear it
+            if (self.element == self.slice.len) {
+
+                // Print to stdout
+                var stdout_buffer: [1024]u8 = undefined;
+                var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+                const stdout = &stdout_writer.interface;
+
+                stdout.print("{s}", .{self.stdout_backlog.items}) catch unreachable;
+                stdout.flush() catch unreachable;
+
+                self.stdout_backlog.deinit(self.allocator);
+                self.stdout_backlog = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+            }
+            return;
+        }
+    };
+
+    return Zqdm;
+}
