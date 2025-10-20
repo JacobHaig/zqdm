@@ -52,15 +52,17 @@ pub fn zqdm(comptime T: type) type {
         }
 
         pub fn next(self: *Self) ?*Self {
+            // Check if we've reached the end
             if (self.element >= self.slice.len) return null;
             self.element += 1;
 
-            self.display();
+            // Update and display the progress bar
+            self.display_progress_bar();
 
             return self;
         }
 
-        pub fn display(self: *Self) void {
+        pub fn display_progress_bar(self: *Self) void {
             var stderr_buffer: [1024]u8 = undefined;
             var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
             const stderr = &stderr_writer.interface;
@@ -74,19 +76,21 @@ pub fn zqdm(comptime T: type) type {
             self.stderr.print("\r", .{}) catch unreachable;
 
             const print_percentage_width: usize = 7; // Width for percentage display (e.g., "100.00%")
-            // const print_estimated_time_width: usize = 50; // Width for estimated time display (e.g., " 13/13 [00:01<00:00,  9.94it/s]")
 
+            // Calculate percentage
             const percentage: f32 = @as(f32, @floatFromInt(self.element)) / @as(f32, @floatFromInt(self.slice.len));
-
             var percentage_buf = [_]u8{0} ** 64;
             const percentage_fmt = self.print_percentage(&percentage_buf, percentage);
 
+            // Info string
             var info_buf = [_]u8{0} ** 256;
             const info_fmt = self.format_estimated_time_remaining(&info_buf, percentage, elapsed_milliseconds);
 
+            // Progress bar
             var progress_bar_buf = [_]u8{0} ** (512 * filled_char.len);
             const progress_bar_fmt = self.print_progress_bar(&progress_bar_buf, percentage, self.terminal_width - print_percentage_width - info_fmt.len);
 
+            // Print all the components
             self.stderr.print("{s}", .{percentage_fmt}) catch unreachable;
             self.stderr.print("{s}", .{progress_bar_fmt}) catch unreachable;
             self.stderr.print("{s}", .{info_fmt}) catch unreachable;
@@ -162,7 +166,7 @@ pub fn zqdm(comptime T: type) type {
             const speed: f32 = if (elapsed_seconds > 0) @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(elapsed_seconds)) else 0.0;
 
             // Combine all parts into the final format
-            return std.fmt.bufPrint(buf, " {s} [{s} < {s}, {d:.2}it/s]", .{
+            return std.fmt.bufPrint(buf, "{s} [{s} < {s}, {d:.2}it/s]", .{
                 progress_fmt,
                 elapsed_fmt,
                 remaining_fmt,
