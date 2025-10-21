@@ -31,5 +31,3 @@ docker run -d --rm --name zqdm zqdm
 # To stop the container
 docker kill zqdm
 ```
-
-The Docker image builds the project for Linux x86_64 and creates a lightweight runtime container.
