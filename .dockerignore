@@ -1,0 +1,27 @@
+# Ignore build outputs and cache
+zig-out/
+zig-cache/
+.zig-cache/
+
+# Ignore development files
+.git/
+.gitignore
+*.md
+main.py
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.iml
+
+# Ignore temporary files
+*.tmp
+*.temp
+*.log

@@ -5,7 +5,7 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
 
-    const slice: []const u8 = "Hello there! This is a demo of zqdm progress bar in Zig. Enjoy!";
+    const slice: []const u8 = "Hello there! This is a demo of zqdm progress bar in Zig. Enjoy!\n";
 
     var progress_bar = zqdm(u8).new(allocator, slice);
     while (progress_bar.next()) |val| {

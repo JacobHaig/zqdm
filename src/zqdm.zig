@@ -34,7 +34,23 @@ pub fn zqdm(comptime T: type) type {
                     _ = std.os.windows.kernel32.GetConsoleScreenBufferInfo(std.fs.File.stdout().handle, &buf);
                     terminal_width = @intCast(buf.srWindow.Right - buf.srWindow.Left + 1);
                 },
-                else => @panic("Only Windows is supported for now. Feel free to contribute!"),
+                .linux => {
+                    // Try to get terminal size using TIOCGWINSZ ioctl
+                    const TIOCGWINSZ = 0x5413;
+                    const winsize = extern struct {
+                        ws_row: u16,
+                        ws_col: u16,
+                        ws_xpixel: u16,
+                        ws_ypixel: u16,
+                    };
+
+                    var ws: winsize = undefined;
+                    const fd = std.fs.File.stdout().handle;
+                    _ = std.os.linux.syscall3(.ioctl, @as(usize, @intCast(fd)), TIOCGWINSZ, @intFromPtr(&ws));
+
+                    terminal_width = ws.ws_col;
+                },
+                else => @panic("Your OS is not supported for now. Feel free to contribute!"),
             }
 
             return Self{
