@@ -32,7 +32,7 @@ pub fn zqdm(comptime T: type) type {
                     // Get terminal width
                     var buf: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
                     _ = std.os.windows.kernel32.GetConsoleScreenBufferInfo(std.fs.File.stdout().handle, &buf);
-                    terminal_width = @intCast(buf.srWindow.Right - buf.srWindow.Left + 1);
+                    terminal_width = @intCast(buf.srWindow.Right - buf.srWindow.Left);
                 },
                 .linux => {
                     // Try to get terminal size using TIOCGWINSZ ioctl
@@ -51,6 +51,10 @@ pub fn zqdm(comptime T: type) type {
                     terminal_width = ws.ws_col;
                 },
                 else => @panic("Your OS is not supported for now. Feel free to contribute!"),
+            }
+
+            if (terminal_width == 0) {
+                terminal_width = 80; // Fallback to 80 if we couldn't get terminal width
             }
 
             return Self{
@@ -248,4 +252,33 @@ pub fn zqdm(comptime T: type) type {
     };
 
     return Zqdm;
+}
+
+test "Static Slice" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = gpa.allocator();
+
+    const slice: []const u8 = "Hello there! This is a demo of zqdm progress bar in Zig. Enjoy!\n";
+
+    var progress_bar = zqdm(u8).new(allocator, slice);
+    while (progress_bar.next()) |val| {
+        std.Thread.sleep(100);
+        try progress_bar.write("{c}", .{val.get()});
+    }
+}
+
+test "Dynamic List" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    var list: std.ArrayList(u8) = .{};
+    try list.appendSlice(allocator, "Hello there! ");
+    try list.appendSlice(allocator, "This is a demo of zqdm progress bar in Zig. ");
+    try list.appendSlice(allocator, "Enjoy!\n");
+
+    var progress_bar = zqdm(u8).new(allocator, list.items);
+    while (progress_bar.next()) |val| {
+        std.Thread.sleep(100);
+        try progress_bar.write("{c}", .{val.get()});
+    }
 }
