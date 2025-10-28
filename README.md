@@ -2,16 +2,23 @@
 
 A progress bar library for Zig, inspired by Python's tqdm.
 
+```rs
+$ zig build run
+100.00% [██████████████████████████████████████████████████████] 64/64 [00:06 < 00:00, 10.67it/s]
+Hello there! This is a demo of zqdm progress bar in Zig. Enjoy!
+```
+
+
 ## Building and Running
 
 ### Local Development
 
 ```bash
 # Build in debug mode
-zig build -Doptimize=Debug
+zig build
 
 # Build in release mode
-zig build -Doptimize=ReleaseFast
+zig build --release=fast
 
 # Run the demo
 zig build run
