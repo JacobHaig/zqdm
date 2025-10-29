@@ -89,7 +89,7 @@ pub fn main() !void {
     try list.appendSlice(allocator, "This is a demo of zqdm progress bar in Zig. ");
     try list.appendSlice(allocator, "Enjoy!\n");
 
-    var progress_bar = zqdm(u8).new(allocator, list.items);
+    var progress_bar = try zqdm(u8).new(allocator, list.items);
     while (progress_bar.next()) |val| {
         std.Thread.sleep(100000000);
         try progress_bar.write("{c}", .{val.get()});

@@ -21,7 +21,7 @@ pub fn zqdm(comptime T: type) type {
 
         stderr: *Io.Writer = undefined,
 
-        pub fn new(allocator: std.mem.Allocator, slice: []const T) Self {
+        pub fn new(allocator: std.mem.Allocator, slice: []const T) !Self {
             var terminal_width: usize = undefined;
 
             switch (builtin.os.tag) {
@@ -62,8 +62,8 @@ pub fn zqdm(comptime T: type) type {
                 .element = 0,
                 .terminal_width = terminal_width,
                 .allocator = allocator,
-                .stdout_backlog = std.ArrayList(u8).initCapacity(allocator, 0) catch unreachable,
-                .start_time = std.time.Instant.now() catch unreachable,
+                .stdout_backlog = try std.ArrayList(u8).initCapacity(allocator, 0),
+                .start_time = try std.time.Instant.now(),
             };
         }
 
@@ -77,59 +77,59 @@ pub fn zqdm(comptime T: type) type {
             self.element += 1;
 
             // Update and display the progress bar
-            self.display_progress_bar();
+            self.display_progress_bar() catch return null;
 
             return self;
         }
 
-        pub fn display_progress_bar(self: *Self) void {
+        pub fn display_progress_bar(self: *Self) !void {
             var stderr_buffer: [1024]u8 = undefined;
             var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
             const stderr = &stderr_writer.interface;
             self.stderr = stderr;
 
-            const now = std.time.Instant.now() catch unreachable;
+            const now = try std.time.Instant.now();
             const elapsed_nanoseconds = now.since(self.start_time);
             const elapsed_milliseconds = @divTrunc(elapsed_nanoseconds, 1_000_000);
 
             // print a carriage return to overwrite the previous line
-            self.stderr.print("\r", .{}) catch unreachable;
+            try self.stderr.print("\r", .{});
 
             const print_percentage_width: usize = 7; // Width for percentage display (e.g., "100.00%")
 
             // Calculate percentage
             const percentage: f32 = @as(f32, @floatFromInt(self.element)) / @as(f32, @floatFromInt(self.slice.len));
             var percentage_buf = [_]u8{0} ** 64;
-            const percentage_fmt = self.print_percentage(&percentage_buf, percentage);
+            const percentage_fmt = try self.print_percentage(&percentage_buf, percentage);
 
             // Info string
             var info_buf = [_]u8{0} ** 256;
-            const info_fmt = self.format_estimated_time_remaining(&info_buf, percentage, elapsed_milliseconds);
+            const info_fmt = try self.format_estimated_time_remaining(&info_buf, percentage, elapsed_milliseconds);
 
             // Progress bar
             var progress_bar_buf = [_]u8{0} ** (512 * filled_char.len);
-            const progress_bar_fmt = self.print_progress_bar(&progress_bar_buf, percentage, self.terminal_width - print_percentage_width - info_fmt.len);
+            const progress_bar_fmt = try self.print_progress_bar(&progress_bar_buf, percentage, self.terminal_width - print_percentage_width - info_fmt.len);
 
             // Print all the components
-            self.stderr.print("{s}", .{percentage_fmt}) catch unreachable;
-            self.stderr.print("{s}", .{progress_bar_fmt}) catch unreachable;
-            self.stderr.print("{s}", .{info_fmt}) catch unreachable;
+            try self.stderr.print("{s}", .{percentage_fmt});
+            try self.stderr.print("{s}", .{progress_bar_fmt});
+            try self.stderr.print("{s}", .{info_fmt});
 
             // If we're done iterating, print a newline to move the cursor to the next line
             if (self.element == self.slice.len) {
-                self.stderr.print("\n", .{}) catch unreachable;
+                try self.stderr.print("\n", .{});
             }
 
-            self.stderr.flush() catch unreachable;
+            try self.stderr.flush();
         }
 
-        fn print_percentage(self: *Self, buf: []u8, percentage: f32) []u8 {
+        fn print_percentage(self: *Self, buf: []u8, percentage: f32) ![]u8 {
             _ = self; // I prefer to keep the method signature consistent
             // Print percentage with 2 decimal places, right-aligned in a field of width 7
-            return std.fmt.bufPrint(buf, "{d:>6.2}%", .{percentage * 100.0}) catch unreachable;
+            return try std.fmt.bufPrint(buf, "{d:>6.2}%", .{percentage * 100.0});
         }
 
-        pub fn format_estimated_time_remaining(self: *Self, buf: []u8, percentage: f32, elapsed_milliseconds: u64) []u8 {
+        pub fn format_estimated_time_remaining(self: *Self, buf: []u8, percentage: f32, elapsed_milliseconds: u64) ![]u8 {
             // 13/13 [00:01<00:00,  9.94it/s]
             // Print elapsed time, estimated remaining time, and iteration speed
 
@@ -137,7 +137,7 @@ pub fn zqdm(comptime T: type) type {
             const index = self.element;
             const total = self.slice.len;
             var progress_buf = [_]u8{0} ** 64;
-            const progress_fmt = std.fmt.bufPrint(&progress_buf, "{d}/{d}", .{ index, total }) catch unreachable;
+            const progress_fmt = try std.fmt.bufPrint(&progress_buf, "{d}/{d}", .{ index, total });
 
             // Calculate elapsed time components
             const elapsed_seconds = @divTrunc(elapsed_milliseconds, 1000);
@@ -146,16 +146,16 @@ pub fn zqdm(comptime T: type) type {
             var elapsed_buf = [_]u8{0} ** 64;
             var elapsed_fmt: []u8 = undefined;
             if (elapsed_hours > 0) {
-                elapsed_fmt = std.fmt.bufPrint(&elapsed_buf, "{d:02}:{d:02}:{d:02}", .{
+                elapsed_fmt = try std.fmt.bufPrint(&elapsed_buf, "{d:02}:{d:02}:{d:02}", .{
                     elapsed_hours,
                     @mod(elapsed_minutes, 60),
                     @mod(elapsed_seconds, 60),
-                }) catch unreachable;
+                });
             } else {
-                elapsed_fmt = std.fmt.bufPrint(&elapsed_buf, "{d:02}:{d:02}", .{
+                elapsed_fmt = try std.fmt.bufPrint(&elapsed_buf, "{d:02}:{d:02}", .{
                     @mod(elapsed_minutes, 60),
                     @mod(elapsed_seconds, 60),
-                }) catch unreachable;
+                });
             }
 
             // Calculate estimated remaining time
@@ -170,36 +170,36 @@ pub fn zqdm(comptime T: type) type {
             var remaining_buf = [_]u8{0} ** 64;
             var remaining_fmt: []u8 = undefined;
             if (remaining_hours > 0) {
-                remaining_fmt = std.fmt.bufPrint(&remaining_buf, "{d:02}:{d:02}:{d:02}", .{
+                remaining_fmt = try std.fmt.bufPrint(&remaining_buf, "{d:02}:{d:02}:{d:02}", .{
                     remaining_hours,
                     @mod(remaining_minutes, 60),
                     @mod(remaining_seconds, 60),
-                }) catch unreachable;
+                });
             } else {
-                remaining_fmt = std.fmt.bufPrint(&remaining_buf, "{d:02}:{d:02}", .{
+                remaining_fmt = try std.fmt.bufPrint(&remaining_buf, "{d:02}:{d:02}", .{
                     @mod(remaining_minutes, 60),
                     @mod(remaining_seconds, 60),
-                }) catch unreachable;
+                });
             }
 
             // Calculate iteration speed
             const speed: f32 = if (elapsed_seconds > 0) @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(elapsed_seconds)) else 0.0;
 
             // Combine all parts into the final format
-            return std.fmt.bufPrint(buf, "{s} [{s} < {s}, {d:.2}it/s]", .{
+            return try std.fmt.bufPrint(buf, "{s} [{s} < {s}, {d:.2}it/s]", .{
                 progress_fmt,
                 elapsed_fmt,
                 remaining_fmt,
                 speed,
-            }) catch unreachable;
+            });
         }
 
-        fn print_progress_bar(self: *Self, buf: []u8, percentage: f32, progress_bar_width: usize) []u8 {
+        fn print_progress_bar(self: *Self, buf: []u8, percentage: f32, progress_bar_width: usize) ![]u8 {
             _ = self; // I prefer to keep the method signature consistent
             var pos: usize = 0;
 
             // Bracket start
-            const start = std.fmt.bufPrint(buf[pos..], " [", .{}) catch unreachable;
+            const start = try std.fmt.bufPrint(buf[pos..], " [", .{});
             pos += start.len;
 
             // Calculate dimensions
@@ -210,18 +210,18 @@ pub fn zqdm(comptime T: type) type {
 
             // Filled part
             for (0..print_width) |_| {
-                const filled = std.fmt.bufPrint(buf[pos..], "{s}", .{filled_char}) catch unreachable;
+                const filled = try std.fmt.bufPrint(buf[pos..], "{s}", .{filled_char});
                 pos += filled.len;
             }
 
             // Empty part
             for (print_width..corrected_progress_bar_width) |_| {
-                const empty = std.fmt.bufPrint(buf[pos..], "{s}", .{empty_char}) catch unreachable;
+                const empty = try std.fmt.bufPrint(buf[pos..], "{s}", .{empty_char});
                 pos += empty.len;
             }
 
             // Bracket end
-            const end = std.fmt.bufPrint(buf[pos..], "] ", .{}) catch unreachable;
+            const end = try std.fmt.bufPrint(buf[pos..], "] ", .{});
             pos += end.len;
 
             return buf[0..pos];
@@ -241,8 +241,8 @@ pub fn zqdm(comptime T: type) type {
                 var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
                 const stdout = &stdout_writer.interface;
 
-                stdout.print("{s}", .{self.stdout_backlog.items}) catch unreachable;
-                stdout.flush() catch unreachable;
+                try stdout.print("{s}", .{self.stdout_backlog.items});
+                try stdout.flush();
 
                 self.stdout_backlog.deinit(self.allocator);
                 self.stdout_backlog = try std.ArrayList(u8).initCapacity(self.allocator, 0);
@@ -260,7 +260,7 @@ test "Static Slice" {
 
     const slice: []const u8 = "Hello there! This is a demo of zqdm progress bar in Zig. Enjoy!\n";
 
-    var progress_bar = zqdm(u8).new(allocator, slice);
+    var progress_bar = try zqdm(u8).new(allocator, slice);
     while (progress_bar.next()) |val| {
         std.Thread.sleep(100);
         try progress_bar.write("{c}", .{val.get()});
@@ -276,7 +276,7 @@ test "Dynamic List" {
     try list.appendSlice(allocator, "This is a demo of zqdm progress bar in Zig. ");
     try list.appendSlice(allocator, "Enjoy!\n");
 
-    var progress_bar = zqdm(u8).new(allocator, list.items);
+    var progress_bar = try zqdm(u8).new(allocator, list.items);
     while (progress_bar.next()) |val| {
         std.Thread.sleep(100);
         try progress_bar.write("{c}", .{val.get()});
