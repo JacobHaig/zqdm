@@ -1,8 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-// const zqdm = @import("zqdm");
-const unicode = @import("std").unicode;
-const Io = @import("std").Io;
+const Io = std.Io;
 
 pub fn zqdm(comptime T: type) type {
     const Zqdm = struct {
@@ -16,13 +14,12 @@ pub fn zqdm(comptime T: type) type {
         terminal_width: usize,
 
         allocator: std.mem.Allocator,
-        stdout_backlog: std.ArrayList(u8),
+        io: Io,
+        stdout_backlog: std.ArrayListUnmanaged(u8),
         start_time: std.time.Instant = undefined,
 
-        stderr: *Io.Writer = undefined,
-
-        pub fn new(allocator: std.mem.Allocator, slice: []const T) !Self {
-            var terminal_width: usize = undefined;
+        pub fn new(allocator: std.mem.Allocator, io: Io, slice: []const T) !Self {
+            var terminal_width: usize = 80;
 
             switch (builtin.os.tag) {
                 .windows => {
@@ -31,8 +28,9 @@ pub fn zqdm(comptime T: type) type {
 
                     // Get terminal width
                     var buf: std.os.windows.CONSOLE_SCREEN_BUFFER_INFO = undefined;
-                    _ = std.os.windows.kernel32.GetConsoleScreenBufferInfo(std.fs.File.stdout().handle, &buf);
-                    terminal_width = @intCast(buf.srWindow.Right - buf.srWindow.Left);
+                    _ = std.os.windows.kernel32.GetConsoleScreenBufferInfo(Io.File.stdout().handle, &buf);
+                    const diff: i16 = buf.srWindow.Right - buf.srWindow.Left;
+                    terminal_width = if (diff > 0) @intCast(diff) else 80;
                 },
                 .linux => {
                     // Try to get terminal size using TIOCGWINSZ ioctl
@@ -45,12 +43,12 @@ pub fn zqdm(comptime T: type) type {
                     };
 
                     var ws: winsize = undefined;
-                    const fd = std.fs.File.stdout().handle;
+                    const fd = Io.File.stdout().handle;
                     _ = std.os.linux.syscall3(.ioctl, @as(usize, @intCast(fd)), TIOCGWINSZ, @intFromPtr(&ws));
 
                     terminal_width = ws.ws_col;
                 },
-                else => @panic("Your OS is not supported for now. Feel free to contribute!"),
+                else => @compileError("zqdm: OS not supported. Feel free to contribute!"),
             }
 
             if (terminal_width == 0) {
@@ -62,38 +60,43 @@ pub fn zqdm(comptime T: type) type {
                 .element = 0,
                 .terminal_width = terminal_width,
                 .allocator = allocator,
-                .stdout_backlog = try std.ArrayList(u8).initCapacity(allocator, 0),
+                .io = io,
+                .stdout_backlog = .{},
                 .start_time = try std.time.Instant.now(),
             };
         }
 
+        pub fn deinit(self: *Self) void {
+            self.stdout_backlog.deinit(self.allocator);
+        }
+
         pub fn get(self: *Self) T {
+            std.debug.assert(self.element > 0); // get() called before first next()
             return self.slice[self.element - 1];
         }
 
-        pub fn next(self: *Self) ?*Self {
+        pub fn next(self: *Self) !?*Self {
             // Check if we've reached the end
             if (self.element >= self.slice.len) return null;
             self.element += 1;
 
             // Update and display the progress bar
-            self.display_progress_bar() catch return null;
+            try self.display_progress_bar();
 
             return self;
         }
 
-        pub fn display_progress_bar(self: *Self) !void {
+        fn display_progress_bar(self: *Self) !void {
             var stderr_buffer: [1024]u8 = undefined;
-            var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+            var stderr_writer = Io.File.stderr().writer(self.io, &stderr_buffer);
             const stderr = &stderr_writer.interface;
-            self.stderr = stderr;
 
             const now = try std.time.Instant.now();
             const elapsed_nanoseconds = now.since(self.start_time);
             const elapsed_milliseconds = @divTrunc(elapsed_nanoseconds, 1_000_000);
 
             // print a carriage return to overwrite the previous line
-            try self.stderr.print("\r", .{});
+            try stderr.print("\r", .{});
 
             const print_percentage_width: usize = 7; // Width for percentage display (e.g., "100.00%")
 
@@ -108,28 +111,32 @@ pub fn zqdm(comptime T: type) type {
 
             // Progress bar
             var progress_bar_buf = [_]u8{0} ** (512 * filled_char.len);
-            const progress_bar_fmt = try self.print_progress_bar(&progress_bar_buf, percentage, self.terminal_width - print_percentage_width - info_fmt.len);
+            const overhead = print_percentage_width + info_fmt.len;
+            const bar_width: usize = if (self.terminal_width > overhead + 4)
+                self.terminal_width - overhead
+            else
+                4; // minimum: " [] "
+            const progress_bar_fmt = try self.print_progress_bar(&progress_bar_buf, percentage, bar_width);
 
             // Print all the components
-            try self.stderr.print("{s}", .{percentage_fmt});
-            try self.stderr.print("{s}", .{progress_bar_fmt});
-            try self.stderr.print("{s}", .{info_fmt});
+            try stderr.print("{s}", .{percentage_fmt});
+            try stderr.print("{s}", .{progress_bar_fmt});
+            try stderr.print("{s}", .{info_fmt});
 
             // If we're done iterating, print a newline to move the cursor to the next line
             if (self.element == self.slice.len) {
-                try self.stderr.print("\n", .{});
+                try stderr.print("\n", .{});
             }
 
-            try self.stderr.flush();
+            try stderr.flush();
         }
 
-        fn print_percentage(self: *Self, buf: []u8, percentage: f32) ![]u8 {
-            _ = self; // I prefer to keep the method signature consistent
+        fn print_percentage(_: *Self, buf: []u8, percentage: f32) ![]u8 {
             // Print percentage with 2 decimal places, right-aligned in a field of width 7
             return try std.fmt.bufPrint(buf, "{d:>6.2}%", .{percentage * 100.0});
         }
 
-        pub fn format_estimated_time_remaining(self: *Self, buf: []u8, percentage: f32, elapsed_milliseconds: u64) ![]u8 {
+        fn format_estimated_time_remaining(self: *Self, buf: []u8, percentage: f32, elapsed_milliseconds: u64) ![]u8 {
             // 13/13 [00:01<00:00,  9.94it/s]
             // Print elapsed time, estimated remaining time, and iteration speed
 
@@ -194,8 +201,7 @@ pub fn zqdm(comptime T: type) type {
             });
         }
 
-        fn print_progress_bar(self: *Self, buf: []u8, percentage: f32, progress_bar_width: usize) ![]u8 {
-            _ = self; // I prefer to keep the method signature consistent
+        fn print_progress_bar(_: *Self, buf: []u8, percentage: f32, progress_bar_width: usize) ![]u8 {
             var pos: usize = 0;
 
             // Bracket start
@@ -204,7 +210,10 @@ pub fn zqdm(comptime T: type) type {
 
             // Calculate dimensions
             const bracket_width: usize = 4;
-            const corrected_progress_bar_width = progress_bar_width - bracket_width;
+            const corrected_progress_bar_width = if (progress_bar_width > bracket_width)
+                progress_bar_width - bracket_width
+            else
+                0;
             const progress_width_f32: f32 = @floatFromInt(corrected_progress_bar_width);
             const print_width: usize = @intFromFloat(percentage * progress_width_f32);
 
@@ -231,23 +240,22 @@ pub fn zqdm(comptime T: type) type {
         pub fn write(self: *Self, comptime fmt: []const u8, args: anytype) !void {
             // Write the user message to stdout_backlog, once its done iterating we'll print it out
             const msg = try std.fmt.allocPrint(self.allocator, fmt, args);
-            _ = try self.stdout_backlog.appendSlice(self.allocator, msg);
+            defer self.allocator.free(msg);
+            try self.stdout_backlog.appendSlice(self.allocator, msg);
 
             // If we're done iterating, print the backlog and clear it
             if (self.element == self.slice.len) {
 
                 // Print to stdout
                 var stdout_buffer: [1024]u8 = undefined;
-                var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+                var stdout_writer = Io.File.stdout().writer(self.io, &stdout_buffer);
                 const stdout = &stdout_writer.interface;
 
                 try stdout.print("{s}", .{self.stdout_backlog.items});
                 try stdout.flush();
 
-                self.stdout_backlog.deinit(self.allocator);
-                self.stdout_backlog = try std.ArrayList(u8).initCapacity(self.allocator, 0);
+                self.stdout_backlog.clearRetainingCapacity();
             }
-            return;
         }
     };
 
@@ -260,9 +268,11 @@ test "Static Slice" {
 
     const slice: []const u8 = "Hello there! This is a demo of zqdm progress bar in Zig. Enjoy!\n";
 
-    var progress_bar = try zqdm(u8).new(allocator, slice);
-    while (progress_bar.next()) |val| {
-        std.Thread.sleep(100);
+    const io = Io.Threaded.global_single_threaded.io();
+    var progress_bar = try zqdm(u8).new(allocator, io, slice);
+    defer progress_bar.deinit();
+    while (try progress_bar.next()) |val| {
+        try std.Io.Clock.Duration.sleep(.{ .clock = .awake, .raw = .fromNanoseconds(100) }, io);
         try progress_bar.write("{c}", .{val.get()});
     }
 }
@@ -276,9 +286,11 @@ test "Dynamic List" {
     try list.appendSlice(allocator, "This is a demo of zqdm progress bar in Zig. ");
     try list.appendSlice(allocator, "Enjoy!\n");
 
-    var progress_bar = try zqdm(u8).new(allocator, list.items);
-    while (progress_bar.next()) |val| {
-        std.Thread.sleep(100);
+    const io = Io.Threaded.global_single_threaded.io();
+    var progress_bar = try zqdm(u8).new(allocator, io, list.items);
+    defer progress_bar.deinit();
+    while (try progress_bar.next()) |val| {
+        try std.Io.Clock.Duration.sleep(.{ .clock = .awake, .raw = .fromNanoseconds(100) }, io);
         try progress_bar.write("{c}", .{val.get()});
     }
 }
